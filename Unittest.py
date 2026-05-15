@@ -3,6 +3,8 @@ import random
 import unittest
 from bsp import *
 from image import *
+from crypto_ops import *
+from py_ecc.optimized_bls12_381 import normalize
 
 class TestCryptoImage(unittest.TestCase):
     
@@ -120,6 +122,76 @@ class TestCryptoImage(unittest.TestCase):
         subset = self.image.crop([0, 1, 2])
         with self.assertRaises(KeyError):
             subset.get_oprf_payload(15)
+
+
+class TestPairingCrypto(unittest.TestCase):
+    
+    def setUp(self):
+        """Initialize the crypto wrapper and some dummy byte payloads for testing."""
+        # Assuming you named the class PairingCrypto and imported it
+        self.crypto = PairingCrypto() 
+        self.test_payload_A = b"test_image_block_index_0_data_xyz"
+        self.test_payload_B = b"test_image_block_index_1_data_abc"
+
+    def test_hash_to_field(self):
+        """Test that hashing to Z_p returns a valid, deterministic scalar."""
+        scalar1 = self.crypto.hash_to_field(self.test_payload_A)
+        scalar2 = self.crypto.hash_to_field(self.test_payload_A)
+        
+        self.assertIsInstance(scalar1, int)
+        self.assertTrue(0 <= scalar1 < self.crypto.order, "Scalar is outside the field Z_p")
+        self.assertEqual(scalar1, scalar2, "Hash to field is not deterministic")
+
+    def test_hash_to_curve_G1(self):
+        """Test that hashing to G1 returns a valid, deterministic curve point."""
+        pt1 = self.crypto.hash_to_curve_G1(self.test_payload_A)
+        pt2 = self.crypto.hash_to_curve_G1(self.test_payload_A)
+        
+        self.assertEqual(len(pt1), 3, "Point is not in projective coordinates (X, Y, Z)")
+        self.assertEqual(pt1, pt2, "Hash to curve is not deterministic")
+
+    def test_scalar_multiplication_and_addition(self):
+        """
+        Verify the homomorphic properties of the curve: 
+        (a * M) + (b * M) == (a + b) * M
+        """
+        M = self.crypto.hash_to_curve_G1(self.test_payload_A)
+        scalar_a = 15
+        scalar_b = 27
+        
+        # Calculate left side: (a * M) + (b * M)
+        pt_a = self.crypto.scalar_mult_G1(M, scalar_a)
+        pt_b = self.crypto.scalar_mult_G1(M, scalar_b)
+        sum_pt = self.crypto.add_G1(pt_a, pt_b)
+        
+        # Calculate right side: (a + b) * M
+        expected_pt = self.crypto.scalar_mult_G1(M, scalar_a + scalar_b)
+        
+        # FIX: Normalize both points to Z=1 before asserting equality
+        self.assertEqual(normalize(sum_pt), normalize(expected_pt), "Curve addition/multiplication algebra failed")
+
+    def test_bilinear_pairing(self):
+        """
+        Verify the fundamental bilinearity property:
+        e(a * P, b * Q) == e(ab * P, Q) == e(P, ab * Q)
+        """
+        a = 5
+        b = 7
+        
+        P = self.crypto.G1
+        Q = self.crypto.G2
+        
+        # e(a * P, b * Q)
+        aP = self.crypto.scalar_mult_G1(P, a)
+        bQ = self.crypto.scalar_mult_G2(Q, b)
+        pairing_1 = self.crypto.evaluate_pairing(aP, bQ)
+        
+        # e(ab * P, Q)
+        abP = self.crypto.scalar_mult_G1(P, a * b)
+        pairing_2 = self.crypto.evaluate_pairing(abP, Q)
+        
+        self.assertEqual(pairing_1, pairing_2, "Bilinear pairing property failed!")
+
 
 if __name__ == '__main__':
     unittest.main()

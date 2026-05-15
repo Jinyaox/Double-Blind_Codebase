@@ -1,5 +1,6 @@
 from pathlib import Path
 
+#-----------------------------------------The function that helps with the folder and input data processing------------------------------------------------
 def get_random_ppm(folder_path):
     """
     Helper function to recursively find all .ppm files in a directory 
