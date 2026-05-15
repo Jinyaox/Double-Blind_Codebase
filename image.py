@@ -3,6 +3,8 @@ from PIL import Image as PILImage
 import math
 
 class CryptoImage:
+
+    # to do, also when we return a block, return both its item and its index - concatenated!!!!!
     def __init__(self, image_path=None, block_num=None, blocks=None, original_size=None):
         """
         Initializes the Image either from a .ppm file path, or from a subset 
@@ -104,22 +106,37 @@ class CryptoImage:
         # Return a new instance using the alternative initialization branch
         return CryptoImage(blocks=cropped_blocks, original_size=self.original_size)
 
-
-    # I will be using the overloaded operators to deal with the following
+    # we do not overload this operator for OPRf input-> this will result in a bad index shift...
     def __getitem__(self, index):
-        """
-        Allows retrieving a block using bracket notation: img[index]
-        Raises a KeyError if the spatial index doesn't exist, which is 
-        standard Python behavior for bracket access.
-        """
+        """Standard access: returns just the integer block m_j"""
         return self.blocks[index]
 
     def __iter__(self):
-        """
-        Allows iterating directly over the blocks: for idx, block in img: ...
-        Yields the (spatial_index, block_integer) pairs.
-        """
+        """Standard iteration: yields (global_index, block_integer)"""
         return iter(self.blocks.items())
+
+    def get_oprf_payload(self, index):
+        """
+        Cryptographic helper: Safely concatenates j || m_j at the byte level.
+        This prevents hash collisions by strictly enforcing the byte boundaries.
+        """
+        if index not in self.blocks:
+            raise KeyError(f"Index {index} not found in this cropped image.")
+            
+        m_j = self.blocks[index]
+        
+        # 1. Convert the index 'j' to a fixed 4-byte (32-bit) representation.
+        # This strict boundary ensures 1||23 cannot collide with 12||3.
+        j_bytes = index.to_bytes(4, byteorder='big')
+        
+        # 2. Convert the massive integer 'm_j' back to bytes.
+        # We calculate the minimum number of bytes needed to represent m_j.
+        byte_length = (m_j.bit_length() + 7) // 8
+        m_j_bytes = m_j.to_bytes(byte_length, byteorder='big')
+        
+        # 3. Concatenate and return the raw bytes ready for hashing
+        payload_bytes = j_bytes + m_j_bytes
+        return payload_bytes
 
     def __len__(self):
         """Returns the number of blocks currently held in this instance"""

@@ -77,5 +77,49 @@ class TestCryptoImage(unittest.TestCase):
             
         self.assertEqual(iterations, self.block_num)
 
+
+    def test_oprf_payload_structure(self):
+        """Test that the payload correctly concatenates the 4-byte index and the block integer."""
+        target_index = 5
+        block_int = self.image[target_index]
+        payload = self.image.get_oprf_payload(target_index)
+        
+        self.assertIsInstance(payload, bytes)
+        self.assertTrue(len(payload) > 4) # 4 bytes for index + at least 1 byte for data
+        
+        # Unpack the payload to verify strict boundaries
+        extracted_index = int.from_bytes(payload[:4], byteorder='big')
+        extracted_block = int.from_bytes(payload[4:], byteorder='big')
+        
+        self.assertEqual(extracted_index, target_index, "The 4-byte index header was malformed.")
+        self.assertEqual(extracted_block, block_int, "The block data was corrupted during byte conversion.")
+
+    def test_crop_preserves_absolute_payload(self):
+        """Test that cropping does not alter the OPRF payload for a given absolute index."""
+        target_indices = [5, 10, 15]
+        subset = self.image.crop(target_indices)
+        
+        for idx in target_indices:
+            original_payload = self.image.get_oprf_payload(idx)
+            subset_payload = subset.get_oprf_payload(idx)
+            
+            # This is the most critical test for your OPRF verification!
+            self.assertEqual(
+                original_payload, 
+                subset_payload, 
+                f"Payload mismatch at index {idx} after cropping!"
+            )
+
+    def test_oprf_payload_invalid_index(self):
+        """Test that requesting a payload for a missing index raises a KeyError."""
+        bad_index = 999
+        with self.assertRaises(KeyError):
+            self.image.get_oprf_payload(bad_index)
+            
+        # Also ensure cropped images reject indices they shouldn't have
+        subset = self.image.crop([0, 1, 2])
+        with self.assertRaises(KeyError):
+            subset.get_oprf_payload(15)
+
 if __name__ == '__main__':
     unittest.main()
