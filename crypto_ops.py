@@ -3,7 +3,8 @@ import hashlib
 from py_ecc.optimized_bls12_381 import (
     G1, G2, Z1, Z2, 
     multiply, add, pairing, curve_order, 
-    is_on_curve, b, field_modulus, FQ 
+    is_on_curve,  # not sure if this is going to be used later??????
+    b, field_modulus, FQ 
 )
 
 class PairingCrypto:
@@ -81,6 +82,61 @@ class PairingCrypto:
                 return safe_g1_pt
             
             counter += 1
+
+    # ==========================================
+    # SERIALIZATION / DESERIALIZATION
+    # ==========================================
+
+    def serialize_G1(self, pt) -> bytes:
+        """
+        Converts a G1 projective point (X, Y, Z) into a raw 96-byte string 
+        for network transmission or hashing.
+        """
+        # 1. Prevent serialization of the point at infinity
+        if pt[2] == FQ(0):
+            raise ValueError("Cannot serialize the point at infinity.")
+            
+        # 2. Normalize projective coordinates (X, Y, Z) back to affine (x, y)
+        # by dividing X and Y by Z. 
+        x_affine = pt[0] / pt[2]
+        y_affine = pt[1] / pt[2]
+        
+        # 3. Extract the raw massive integers using the '.n' property
+        x_int = x_affine.n
+        y_int = y_affine.n
+        
+        # 4. Pack them into exactly 48 bytes each 
+        x_bytes = x_int.to_bytes(48, byteorder='big')
+        y_bytes = y_int.to_bytes(48, byteorder='big')
+        
+        return x_bytes + y_bytes
+
+    def deserialize_G1(self, pt_bytes: bytes):
+        """
+        Converts a 96-byte string back into a valid G1 projective point 
+        (Tuple[FQ, FQ, FQ]) for mathematical operations.
+        """
+        if len(pt_bytes) != 96:
+            raise ValueError("Invalid G1 byte length. Expected 96 uncompressed bytes.")
+            
+        # 1. Split the 96 bytes and convert back to integers
+        x_int = int.from_bytes(pt_bytes[:48], byteorder='big')
+        y_int = int.from_bytes(pt_bytes[48:], byteorder='big')
+        
+        # 2. Wrap them back in the FQ field objects
+        x_fq = FQ(x_int)
+        y_fq = FQ(y_int)
+        
+        # 3. Reconstruct the projective tuple (X, Y, Z=1)
+        pt = (x_fq, y_fq, FQ(1))
+        
+        # 4. Security Check: Ensure the adversary didn't send a point off the curve!
+        # Because we are using the optimized library, we use the algebraic check
+        y_squared = (x_fq ** 3) + FQ(b)
+        if (y_fq ** 2) != y_squared:
+            raise ValueError("Deserialized point is NOT on the BLS12-381 curve!")
+            
+        return pt
 
     # ==========================================
     # BILINEAR PAIRING OPERATIONS (G1 x G2 -> GT)
