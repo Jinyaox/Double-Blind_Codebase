@@ -160,22 +160,31 @@ class KeyedKZGClient:
         self.srs_G2 = srs_G2
         self.pk = pk
 
-    def batch_verify(self, C_sk: tuple, indices: list, tags: list, proofs: list) -> bool:
+    def batch_verify(self, C_sk: tuple, indices: list, tags: list, proofs: list, dummy_mask: list = None) -> bool:
         """
         Executes the highly optimized batched folding verification.
         Validates multiple proofs with exactly two pairings.
+        Dummies (where dummy_mask[i] is True) are assigned a folding scalar of 0.
         """
         k = len(indices)
         
-        # 1. Sample random scalars \gamma_j for folding
-        gammas = [int.from_bytes(os.urandom(16), 'big') % self.crypto.order for _ in range(k)]
+        # --- SIDE-CHANNEL PROTECTION: ZERO-WEIGHT FOLDING ---
+        if dummy_mask is None:
+            dummy_mask = [False] * k
+            
+        # If an index is a dummy, its gamma scalar is forced to 0.
+        # Otherwise, sample a random 16-byte scalar for secure folding.
+        gammas = [
+            0 if dummy_mask[i] else (int.from_bytes(os.urandom(16), 'big') % self.crypto.order) 
+            for i in range(k)
+        ]
         
         # Initialize accumulators
         C_agg = self.crypto.Z1
         P_tag_agg = self.crypto.Z1
         W_agg = self.crypto.Z1
         
-        # 2. Compute the aggregations (Algorithm 2 in your paper)
+        # Compute the aggregations 
         for i in range(k):
             j = indices[i]
             T_j = tags[i]
@@ -183,31 +192,23 @@ class KeyedKZGClient:
             gamma_j = gammas[i]
             
             # --- C_agg Accumulation ---
-            # gamma_j * C_sk
             term1 = self.crypto.scalar_mult_G1(C_sk, gamma_j)
-            # (gamma_j * j) * pi_{sk, j}
             term2 = self.crypto.scalar_mult_G1(pi_sk_j, (gamma_j * j) % self.crypto.order)
             C_agg = self.crypto.add_G1(C_agg, self.crypto.add_G1(term1, term2))
             
             # --- P_tag_agg Accumulation ---
-            # (gamma_j * T_j) * G1
             tag_term = self.crypto.scalar_mult_G1(self.crypto.G1, (gamma_j * T_j) % self.crypto.order)
             P_tag_agg = self.crypto.add_G1(P_tag_agg, tag_term)
             
             # --- W_agg Accumulation ---
-            # gamma_j * pi_{sk, j}
             w_term = self.crypto.scalar_mult_G1(pi_sk_j, gamma_j)
             W_agg = self.crypto.add_G1(W_agg, w_term)
 
-        # 3. The Bilinear Pairing Check
-        # e(C_agg, G2) == e(P_tag_agg, pk) * e(W_agg, [s]_2)
-        
-        # Left Side
+        # The Bilinear Pairing Check
         lhs = self.crypto.evaluate_pairing(C_agg, self.srs_G2[0])
         
-        # Right Side (Multiply the resulting FQ12 pairing elements)
         pair1 = self.crypto.evaluate_pairing(P_tag_agg, self.pk)
         pair2 = self.crypto.evaluate_pairing(W_agg, self.srs_G2[1])
-        rhs = pair1 * pair2  # py_ecc overloads the * operator for FQ12 multiplication!
+        rhs = pair1 * pair2  
         
         return lhs == rhs
