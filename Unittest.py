@@ -5,6 +5,8 @@ from bsp import *
 from image import *
 from crypto_ops import *
 from py_ecc.optimized_bls12_381 import normalize
+from oprf import OPRFServer, OPRFClient
+from KZGpoly import TrustedSetup, KeyedKZGServer, KeyedKZGClient
 
 class TestCryptoImage(unittest.TestCase):
     
@@ -191,7 +193,109 @@ class TestPairingCrypto(unittest.TestCase):
         pairing_2 = self.crypto.evaluate_pairing(abP, Q)
         
         self.assertEqual(pairing_1, pairing_2, "Bilinear pairing property failed!")
+        
+class TestDoubleBlindProtocol(unittest.TestCase):
+    
+    @classmethod
+    def setUpClass(cls):
+        """Initialize the core cryptography engine and generate mock dataset payloads."""
+        cls.crypto = PairingCrypto()
+        cls.num_blocks = 16
+        
+        # Simulate the output of CryptoImage.get_oprf_payload(j)
+        # We use strict byte boundaries: 4 bytes for index j, plus dummy data
+        cls.mock_payloads = {
+            j: j.to_bytes(4, 'big') + f"_dummy_image_data_block_{j}".encode() 
+            for j in range(cls.num_blocks)
+        }
 
+    def setUp(self):
+        """Run the Trusted Setup and Offline Server Registration before each test."""
+        # 1. TRUSTED SETUP
+        self.srs = TrustedSetup(crypto=self.crypto, max_degree=self.num_blocks + 1)
+        
+        # 2. SERVER INITIALIZATION
+        self.oprf_server = OPRFServer(self.crypto)
+        self.kzg_server = KeyedKZGServer(self.crypto, self.srs)
+        
+        # 3. OFFLINE REGISTRATION PHASE
+        self.indices = list(range(self.num_blocks))
+        all_payloads = [self.mock_payloads[j] for j in self.indices]
+        
+        # Generate authentic tags
+        self.authentic_tags = self.oprf_server.register_dataset(all_payloads)
+        
+        # Commit to the dataset
+        self.C_sk = self.kzg_server.register_and_commit(self.indices, self.authentic_tags)
+
+    def test_protocol_completeness(self):
+        """
+        Tests the honest execution of the protocol. 
+        Proves Theorem 1 (Completeness).
+        """
+        # --- 1. CLIENT PREPARATION ---
+        subset_indices = [2, 7, 14]
+        subset_payloads = {j: self.mock_payloads[j] for j in subset_indices}
+        
+        oprf_client = OPRFClient(self.crypto)
+        
+        # Client blinds and shuffles their subset
+        blinded_queries, unblinding_context = oprf_client.blind_subset(subset_payloads)
+        
+        # --- 2. ONLINE OPRF PHASE ---
+        # Server blindly evaluates the queries
+        server_responses = oprf_client.interact_with_server(self.oprf_server, blinded_queries)
+        
+        # Client unblinds the responses to recover the tags
+        client_tags_dict = oprf_client.unblind_responses(server_responses, unblinding_context)
+        
+        # Verify OPRF Correctness: Client's tags must perfectly match Server's offline tags
+        for j in subset_indices:
+            self.assertEqual(
+                client_tags_dict[j], 
+                self.authentic_tags[j], 
+                f"OPRF tag mismatch at index {j}!"
+            )
+            
+        # --- 3. KEYED KZG VERIFICATION PHASE ---
+        # Server provides the proofs for the requested subset
+        proofs = [self.kzg_server.generate_keyed_proof(j, self.authentic_tags[j]) for j in subset_indices]
+        
+        # Client strictly orders their recovered tags to match the indices list
+        client_tags_list = [client_tags_dict[j] for j in subset_indices]
+        
+        kzg_client = KeyedKZGClient(self.crypto, self.srs.srs_G2, self.kzg_server.pk)
+        
+        # Execute the batched folding verification
+        is_valid = kzg_client.batch_verify(self.C_sk, subset_indices, client_tags_list, proofs)
+        
+        # The protocol should accept the honest proofs
+        self.assertTrue(is_valid, "Batch verification failed on valid proofs.")
+
+    def test_forgery_rejection_game_GFAB(self):
+        """
+        Tests the Data Forgery security game.
+        If the Client maliciously alters a block (yielding a forged tag), 
+        the Keyed KZG equation must reject it.
+        """
+        subset_indices = [3, 9]
+        
+        # Client attempts to verify an honest tag and a forged tag
+        honest_tag = self.authentic_tags[3]
+        forged_tag = (self.authentic_tags[9] + 1) % self.crypto.order # Simulating a modified block payload
+        
+        client_tags_list = [honest_tag, forged_tag]
+        
+        # Server provides valid proofs for the authentic indices
+        proofs = [self.kzg_server.generate_keyed_proof(j, self.authentic_tags[j]) for j in subset_indices]
+        
+        kzg_client = KeyedKZGClient(self.crypto, self.srs.srs_G2, self.kzg_server.pk)
+        
+        # Execute the batched folding verification
+        is_valid = kzg_client.batch_verify(self.C_sk, subset_indices, client_tags_list, proofs)
+        
+        # The protocol MUST reject the batch due to the forged tag
+        self.assertFalse(is_valid, "Security Failure: Batch verification accepted a forged block tag!")
 
 if __name__ == '__main__':
     unittest.main()
