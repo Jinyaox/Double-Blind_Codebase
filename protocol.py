@@ -104,7 +104,7 @@ class ProtocolClient:
         self.oprf_client = OPRFClient(self.crypto)
         self.kzg_client = KeyedKZGClient(self.crypto, self.srs_G2, self.pk)
 
-    def Verify(self, subset: CryptoImage, C_sk: tuple, server: ProtocolServer, total_image_blocks: int, pad_to_size: int = 16) -> int:
+    def Verify(self, subset: CryptoImage, C_sk: tuple, server: ProtocolServer, total_image_blocks: int, pad_to_size: int) -> int:
         """
         ALGORITHM 3: Interactive Subset Verification (with Side-Channel Protection)
         Executes the padded double-blind protocol against the Server instance.
