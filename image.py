@@ -141,3 +141,67 @@ class CryptoImage:
     def __len__(self):
         """Returns the number of blocks currently held in this instance"""
         return len(self.blocks)
+
+
+#------------------------------------------------------Defines the Second Child class to support variable-size cropping-------------------------------
+
+
+class HierarchicalCryptoImage(CryptoImage):
+    def __init__(self, image_path=None, block_nums=None, blocks=None, original_size=None):
+        """
+        Initializes the Image at multiple resolutions.
+        block_nums should be a list like [1024, 256, 64]
+        """
+        self.blocks = {}
+        self.original_size = original_size
+        self.level_offsets = {}  # Tracks the starting index for each resolution layer
+
+        if image_path and block_nums:
+            current_offset = 0
+            for b_num in block_nums:
+                self.level_offsets[b_num] = current_offset
+                self._load_and_partition_with_offset(image_path, b_num, current_offset)
+                current_offset += b_num
+        elif blocks is not None:
+            self.blocks = blocks
+        else:
+            raise ValueError("Must provide either (image_path and block_nums) or (blocks).")
+
+    def _load_and_partition_with_offset(self, image_path, block_num, offset):
+        """
+        Slices the image into `block_num` pieces, starting the index at `offset`.
+        """
+        with PILImage.open(image_path) as img:
+            img = img.convert('RGB')
+            width, height = img.size
+            self.original_size = (width, height)
+            
+            cols, rows = self._get_grid_dimensions(width, height, block_num)
+            block_w = width // cols
+            block_h = height // rows
+            
+            index = offset
+            for r in range(rows):
+                for c in range(cols):
+                    left = c * block_w
+                    upper = r * block_h
+                    right = width if c == cols - 1 else (c + 1) * block_w
+                    lower = height if r == rows - 1 else (r + 1) * block_h
+                    
+                    box = (left, upper, right, lower)
+                    block_img = img.crop(box)
+                    
+                    block_bytes = block_img.tobytes()
+                    block_int = int.from_bytes(block_bytes, byteorder='big')
+                    
+                    self.blocks[index] = block_int
+                    index += 1
+
+    def crop(self, indices):
+        """Returns a new HierarchicalCryptoImage containing ONLY the requested blocks."""
+        invalid_indices = [idx for idx in indices if idx not in self.blocks]
+        if invalid_indices:
+            raise ValueError(f"Indices not found in image: {invalid_indices}")
+            
+        cropped_blocks = {idx: self.blocks[idx] for idx in indices}
+        return HierarchicalCryptoImage(blocks=cropped_blocks, original_size=self.original_size)
