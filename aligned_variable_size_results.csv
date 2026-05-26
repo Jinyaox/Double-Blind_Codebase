@@ -1,0 +1,3 @@
+Architecture,Total_Registered_N,True_Subset_I,Padded_Batch,Avg_Offline_Time_s,Avg_Online_Verify_Time_s,Bandwidth_KB
+Flat Grid,512,8,32,30.2593,98.7311,9.00
+Hierarchical Grid,672,2,8,51.6064,30.1638,2.25
