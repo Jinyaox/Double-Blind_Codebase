@@ -1,0 +1,8 @@
+python -m venv venv
+source venv/bin/activate  # or Windows equivalent
+pip install -r requirements.txt
+
+
+
+For this machine only
+doubleblind\Scripts\Activate.ps1
